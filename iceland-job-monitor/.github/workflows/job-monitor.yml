@@ -1,0 +1,67 @@
+name: Iceland job monitor
+
+on:
+  schedule:
+    - cron: "0 17 * * *"
+      timezone: "Atlantic/Reykjavik"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: iceland-job-monitor
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Install Chromium
+        run: python -m playwright install --with-deps chromium
+
+      - name: Check careers pages
+        run: python job_monitor.py
+        env:
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          # Optional. If omitted, Gmail SMTP is used and the sender is SMTP_USERNAME.
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+
+      # The JSON file is the monitor's memory. It changes only when an alert is
+      # sent or a notification record expires after 30 days.
+      - name: Persist notification state
+        if: always()
+        shell: bash
+        run: |
+          if [ ! -f job_monitor_state.json ]; then
+            exit 0
+          fi
+
+          git add job_monitor_state.json
+
+          if git diff --cached --quiet; then
+            echo "Notification state did not change."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Update job monitor notification state [skip ci]"
+          git push
